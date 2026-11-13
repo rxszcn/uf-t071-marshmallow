@@ -998,14 +998,22 @@ class Integer(Number[int]):
     """An integer field.
 
     :param strict: If `True`, only integer types are valid.
-        Otherwise, any value castable to `int` is valid.
+        Otherwise, values castable to `int` are valid, with two exceptions:
+        floats are only accepted when their fractional part is zero, and
+        strings must be plain ASCII integer text (underscore separators and
+        non-ASCII digit characters are rejected).
     :param kwargs: The same keyword arguments that :class:`Number` receives.
     """
 
     num_type = int
 
     #: Default error messages.
-    default_error_messages = {"invalid": "Not a valid integer."}
+    default_error_messages = {
+        "invalid": "Not a valid integer.",
+        "invalid_float": "Float value with a non-zero fractional part is not a valid integer.",
+        "invalid_underscore": "Underscore-separated number string is not a valid integer.",
+        "invalid_unicode_digits": "Number string with non-ASCII digits is not a valid integer.",
+    }
 
     def __init__(
         self,
@@ -1021,6 +1029,25 @@ class Integer(Number[int]):
     def _validated(self, value: typing.Any) -> int:
         if self.strict and not isinstance(value, numbers.Integral):
             raise self.make_error("invalid", input=value)
+        # Reject floats that would lose their fractional part when cast to int.
+        # Non-finite floats fall through so that `int()` raises and the
+        # existing "too_large"/"invalid" errors are preserved.
+        if isinstance(value, float) and math.isfinite(value) and not value.is_integer():
+            raise self.make_error("invalid_float", input=value)
+        if isinstance(value, str):
+            try:
+                int(value)
+            except ValueError:
+                # Not parseable as an integer at all; let `Number._validated`
+                # raise the standard "invalid" error.
+                pass
+            else:
+                # `int()` silently accepts underscore separators and non-ASCII
+                # (Unicode) decimal digits. Reject both forms explicitly.
+                if "_" in value:
+                    raise self.make_error("invalid_underscore", input=value)
+                if any(not char.isascii() for char in value):
+                    raise self.make_error("invalid_unicode_digits", input=value)
         return super()._validated(value)
 
 

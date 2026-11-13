@@ -127,6 +127,122 @@ class TestFieldDeserialization:
             field.deserialize("42")
         assert excinfo.value.args[0] == "Not a valid integer."
 
+    def test_integer_field_accepts_whole_floats(self):
+        field = fields.Integer()
+        for value in (42.0, -7.0, 0.0):
+            result = field.deserialize(value)
+            assert isinstance(result, int)
+            assert result == int(value)
+
+    @pytest.mark.parametrize("value", [42.5, -0.1, 3.14, 1e-10])
+    def test_integer_field_rejects_fractional_floats(self, value):
+        field = fields.Integer()
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(value)
+        assert (
+            excinfo.value.args[0]
+            == "Float value with a non-zero fractional part is not a valid integer."
+        )
+
+    @pytest.mark.parametrize("value", ["1_000", "4_2", "+1_0", "-1_0"])
+    def test_integer_field_rejects_underscore_separated_strings(self, value):
+        field = fields.Integer()
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(value)
+        assert (
+            excinfo.value.args[0]
+            == "Underscore-separated number string is not a valid integer."
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "١٢٣",  # Arabic-Indic digits
+            "４２",  # fullwidth digits  # noqa: RUF001
+            "४२",  # Devanagari digits
+        ],
+    )
+    def test_integer_field_rejects_unicode_digit_strings(self, value):
+        field = fields.Integer()
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(value)
+        assert (
+            excinfo.value.args[0]
+            == "Number string with non-ASCII digits is not a valid integer."
+        )
+
+    def test_integer_field_malformed_form_error_messages_are_distinct(self):
+        field = fields.Integer()
+        messages = set()
+        for value in ("1_000", 42.5, "١٢٣"):
+            with pytest.raises(ValidationError) as excinfo:
+                field.deserialize(value)
+            messages.add(excinfo.value.args[0])
+        assert len(messages) == 3
+        assert "Not a valid integer." not in messages
+
+    def test_integer_field_keeps_existing_error_messages(self):
+        field = fields.Integer()
+        # Out-of-range values keep the "too_large" error message.
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(float("inf"))
+        assert excinfo.value.args[0] == "Number too large."
+        # Non-numeric and non-integer-text forms keep the "invalid" message.
+        for value in ("bad", "42.0", "hello_world", "1__0", {}, []):
+            with pytest.raises(ValidationError) as excinfo:
+                field.deserialize(value)
+            assert excinfo.value.args[0] == "Not a valid integer."
+
+    def test_integer_field_malformed_forms_in_list(self):
+        field = fields.List(fields.Integer())
+        assert field.deserialize([42, "42", 42.0]) == [42, 42, 42]
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(["1_000", 42.5, "١٢٣"])
+        assert excinfo.value.args[0] == {
+            0: ["Underscore-separated number string is not a valid integer."],
+            1: ["Float value with a non-zero fractional part is not a valid integer."],
+            2: ["Number string with non-ASCII digits is not a valid integer."],
+        }
+
+    def test_integer_field_malformed_forms_in_nested_schema(self):
+        class InnerSchema(Schema):
+            value = fields.Integer()
+
+        class OuterSchema(Schema):
+            inner = fields.Nested(InnerSchema)
+
+        schema = OuterSchema()
+        assert schema.load({"inner": {"value": 42.0}}) == {"inner": {"value": 42}}
+        assert schema.load({"inner": {"value": "42"}}) == {"inner": {"value": 42}}
+        malformed = {
+            "1_000": "Underscore-separated number string is not a valid integer.",
+            42.5: "Float value with a non-zero fractional part is not a valid integer.",
+            "١٢٣": "Number string with non-ASCII digits is not a valid integer.",
+        }
+        for value, message in malformed.items():
+            with pytest.raises(ValidationError) as excinfo:
+                schema.load({"inner": {"value": value}})
+            assert excinfo.value.messages == {"inner": {"value": [message]}}
+
+    def test_integer_field_malformed_forms_with_range_validator(self):
+        field = fields.Integer(validate=validate.Range(min=0, max=100))
+        # Boundary values and whole floats still pass and feed the validator.
+        assert field.deserialize(0) == 0
+        assert field.deserialize(100) == 100
+        assert field.deserialize(42.0) == 42
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(101)
+        assert excinfo.value.args[0] == [
+            "Must be greater than or equal to 0 and less than or equal to 100."
+        ]
+        # Malformed forms are rejected before validators run.
+        with pytest.raises(ValidationError) as excinfo:
+            field.deserialize(42.5)
+        assert (
+            excinfo.value.args[0]
+            == "Float value with a non-zero fractional part is not a valid integer."
+        )
+
     def test_decimal_field_deserialization(self):
         m1 = 12
         m2 = "12.355"

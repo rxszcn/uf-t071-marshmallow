@@ -6,7 +6,9 @@ from marshmallow import EXCLUDE, Schema, fields
 class UserSchema(Schema):
     name = fields.String(allow_none=True)
     email = fields.Email(allow_none=True)
-    age = fields.Integer()
+    # Float because the `serialized_user` fixture carries a fractional age,
+    # which `Integer` rejects on load.
+    age = fields.Float()
     created = fields.DateTime()
     id = fields.Integer(allow_none=True)
     homepage = fields.Url()
